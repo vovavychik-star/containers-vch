@@ -1,48 +1,54 @@
-# Assistant
+# Приложение-ассистент: Оркестрация стека через Docker Compose
 
-Персональный ассистент на FastAPI с интеграцией СУБД PostgreSQL, персистентными томами данных и сетевой изоляцией. Репозиторий ведётся в рамках лабораторных по Docker и Kubernetes.
+Данный раздел содержит инструкции по сборке, запуску и масштабированию многоконтейнерного приложения в рамках Лабораторной работы №4.
 
-Автор: Вычик Владимир, ИСУ 465463
+## 🛠 Состав стека сервисов
+Инфраструктура описана в файле `docker-compose.yml` и изолирована внутри bridge-сети `vychik-backend`:
+* **app** (`vychik-assistant`) — Python-приложение на базе FastAPI (порт `8063` -> внутренний `5493`).
+* **db** (`vychik-postgres`) — Реляционная СУБД PostgreSQL 15 для хранения данных (внутренний порт `5432`, данные примонтированы к volume `vychik-pgdata`).
+* **redis** (`vychik-redis`) — Высокопроизводительное хранилище в оперативной памяти для кэширования ответов внешних API (порт `6433` -> внутренний `6379`).
 
-## Как запустить
+## 🚀 Быстрый запуск (Стандартная конфигурация)
 
+1. Подготовьте локальный файл переменных окружения:
 ```bash
-# 1. Создание изолированной сети и постоянного тома данных
-docker network create vychik-backend
-docker volume create vychik-pgdata
-
-# 2. Запуск СУБД PostgreSQL во внутренней сети backend
-docker run -d \
-  --name vychik-postgres \
-  --network vychik-backend \
-  -e POSTGRES_USER=user_465463 \
-  -e POSTGRES_PASSWORD=pgpass_465463 \
-  -e POSTGRES_DB=vychik63 \
-  -v vychik-pgdata:/var/lib/postgresql/data \
-  postgres:15
-
-# 3. Запуск приложения ассистента с линковкой внешней конфигурации через Bind Mount
-docker run -d \
-  --name vychik-assistant \
-  --network vychik-backend \
-  -p 8063:5493 \
-  -e APP_OWNER=vychik \
-  -e APP_SECRET=secret63vychik \
-  -e DATABASE_URL="postgresql://user_465463:pgpass_465463@vychik-postgres:5432/vychik63" \
-  -v \$(pwd)/config:/app/config:ro \
-  vychik-assistant:v3
+cp .env.example .env
+# Заполните персональные параметры внутри .env (скрыт от Git)
 ```
 
-## Переменные окружения
-
-| Переменная | Для чего | Пример |
-| --- | --- | --- |
-| `APP_OWNER` | ваша фамилия, показывается на главной | `vychik` |
-| `APP_SECRET` | секретный ключ для авторизации флага | `secret63vychik` |
-| `DATABASE_URL` | строка подключения к изолированной СУБД по имени контейнера | `postgresql://user_465463:pgpass_465463@vychik-postgres:5432/vychik63` |
-
-## Как проверить
-
+2. Запустите весь стек в фоновом режиме с автоматической сборкой образа:
 ```bash
-curl http://localhost:8063/health
+docker compose up -d --build
+```
+
+3. Проверьте статус контейнеров (все сервисы должны быть `Up (healthy)`):
+```bash
+docker compose ps
+```
+
+## 📈 Масштабирование сервиса (Scaling)
+
+Архитектура поддерживает горизонтальное масштабирование веб-приложения с использованием общего слоя кэширования. Конфигурация описана в файле `docker-compose.scale.yml`.
+
+1. Остановите текущую одиночную конфигурацию:
+```bash
+docker compose down
+```
+
+2. Запустите стек с тремя независимыми репликами сервиса `app`:
+```bash
+docker compose -f docker-compose.scale.yml up -d --build --scale app=3
+```
+
+3. Узнайте динамические порты на хосте, которые Docker выделил для реплик:
+```bash
+docker compose -f docker-compose.scale.yml ps app
+```
+
+## 🧼 Очистка окружения
+Для полной остановки сервисов и удаления виртуальных сетей выполните:
+```bash
+docker compose down
+# Или для конфигурации масштабирования:
+docker compose -f docker-compose.scale.yml down
 ```
