@@ -2,11 +2,19 @@ from fastapi import FastAPI
 from pydantic import BaseModel
 import os
 import httpx
+import json
+import redis
 
 app = FastAPI(title="Personal Assistant")
 
-OWNER = os.getenv("APP_OWNER", "anonymous")
-SECRET_KEY = os.getenv("APP_SECRET", "default_secret")
+#   
+OWNER = os.getenv("APP_OWNER", "vychik")
+SECRET_KEY = os.getenv("APP_SECRET", "secret63vychik")
+REDIS_URL = os.getenv("REDIS_URL", "redis://redis:6379/0")
+CACHE_TTL = int(os.getenv("CACHE_TTL", "120"))
+
+#  Redis (decode_responses=True     )
+redis_client = redis.from_url(REDIS_URL, decode_responses=True)
 
 
 class Note(BaseModel):
@@ -19,10 +27,10 @@ notes: list[str] = []
 @app.get("/")
 async def root():
     return {
-        "message": f"👋 Привет, {OWNER}!",
+        "message": f" , {OWNER}!",
         "service": "personal-assistant",
         "version": "1.0",
-        "endpoints": ["/me", "/notes", "/weather/{city}", "/secret/{key}"],
+        "endpoints": ["/me", "/notes", "/weather/{city}", "/cache/stats", "/secret/{key}"],
     }
 
 
@@ -35,9 +43,7 @@ async def health():
 async def me():
     return {
         "owner": OWNER,
-        "secret_prefix": SECRET_KEY[:6]
-        if SECRET_KEY != "default_secret"
-        else "NOT_SET",
+        "secret_prefix": SECRET_KEY[:6] if SECRET_KEY != "default_secret" else "NOT_SET",
     }
 
 
@@ -56,28 +62,38 @@ async def secret(key: str):
 
 
 WEATHER_CODES: dict[int, str] = {
-    0: "☀️ Ясно", 1: "🌤 Малооблачно", 2: "⛅ Переменная облачность",
-    3: "☁️ Пасмурно", 45: "🌫 Туман", 48: "🌫 Изморозь",
-    51: "🌦 Лёгкая морось", 53: "🌦 Морось", 55: "🌧 Сильная морось",
-    61: "🌧 Небольшой дождь", 63: "🌧 Дождь", 65: "🌧 Сильный дождь",
-    71: "🌨 Небольшой снег", 73: "🌨 Снег", 75: "❄️ Сильный снег",
-    80: "🌦 Ливень", 81: "🌧 Сильный ливень", 82: "⛈ Штормовой ливень",
-    95: "⛈ Гроза", 96: "⛈ Гроза с градом", 99: "⛈ Сильная гроза с градом",
+    0: "", 1: " ", 2: " ",
+    3: "", 45: "", 48: " ",
+    51: " ", 53: " ", 55: " ",
+    61: " ", 63: " ", 65: " ",
+    71: " ", 73: " ", 75: " ",
+    80: " ", 81: " ", 82: " ",
+    95: "", 96: "   ", 99: "   ",
 }
 
 
 @app.get("/weather/{city}")
 async def weather(city: str):
     try:
+        #        
+        cache_key = f"weather:{OWNER}:{city.lower()}"
+
+        #   Redis
+        cached = redis_client.get(cache_key)
+        if cached:
+            data = json.loads(cached)
+            data["source"] = "cache"  # ,     
+            return data
+
         async with httpx.AsyncClient(timeout=5.0) as client:
             geo_resp = await client.get(
-                "https://geocoding-api.open-meteo.com/v1/search",
+                "https://open-meteo.com",
                 params={"name": city, "count": 1, "language": "ru"},
             )
             geo_data = geo_resp.json()
 
             if not geo_data.get("results"):
-                return {"error": f"City «{city}» not found"}
+                return {"error": f"City '{city}' not found"}
 
             location = geo_data["results"][0]
             lat = location["latitude"]
@@ -86,7 +102,7 @@ async def weather(city: str):
             country = location.get("country", "")
 
             weather_resp = await client.get(
-                "https://api.open-meteo.com/v1/forecast",
+                "https://open-meteo.com",
                 params={
                     "latitude": lat,
                     "longitude": lon,
@@ -94,10 +110,9 @@ async def weather(city: str):
                 },
             )
             weather_data = weather_resp.json()["current"]
-
             code = weather_data.get("weather_code", -1)
 
-            return {
+            result = {
                 "city": city_name,
                 "country": country,
                 "coordinates": {"lat": lat, "lon": lon},
@@ -105,9 +120,27 @@ async def weather(city: str):
                 "humidity_pct": weather_data["relative_humidity_2m"],
                 "wind_km_h": weather_data["wind_speed_10m"],
                 "condition": WEATHER_CODES.get(code, f"Code {code}"),
+                "source": "api",  # ,      API
             }
+
+            #       TTL (120 )
+            redis_client.setex(cache_key, CACHE_TTL, json.dumps(result))
+            return result
+
     except Exception as e:
         return {"error": f"Failed to get weather: {type(e).__name__}: {e}"}
+
+
+@app.get("/cache/stats")
+async def cache_stats():
+    """    """
+    keys = redis_client.keys(f"weather:{OWNER}:*")
+    return {
+        "owner": OWNER,
+        "ttl_seconds": CACHE_TTL,
+        "cached_count": len(keys),
+        "cached_cities": sorted(k.split(":")[-1] for k in keys),
+    }
 
 
 @app.post("/notes")
