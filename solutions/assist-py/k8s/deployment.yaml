@@ -1,0 +1,46 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: assist-app
+  labels:
+    app: assist-app
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: assist-app
+  template:
+    metadata:
+      labels:
+        app: assist-app
+    spec:
+      containers:
+        - name: assist-app
+          image: assist-py:v1
+          imagePullPolicy: Never
+          ports:
+            - containerPort: 5493
+          envFrom:
+            - configMapRef:
+                name: assist-config
+            - secretRef:
+                name: assist-secret
+          resources:
+            requests:
+              cpu: "100m"
+              memory: "128Mi"
+            limits:
+              cpu: "300m"
+              memory: "256Mi"
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 5493
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 5493
+            initialDelaySeconds: 3
+            periodSeconds: 5
